@@ -11,6 +11,56 @@ from reportlab.lib import colors
 from reportlab.lib.units import inch
 from io import BytesIO
 
+import sqlite3
+from datetime import datetime
+
+DB_PATH = "../data/predictions_log.db"
+
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS predictions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            timestamp TEXT,
+            model_used TEXT,
+            age INTEGER,
+            sex TEXT,
+            job INTEGER,
+            housing TEXT,
+            saving_accounts TEXT,
+            checking_accounts TEXT,
+            credit_amount INTEGER,
+            duration INTEGER,
+            prediction TEXT,
+            probability_good REAL,
+            credit_score INTEGER,
+            decision TEXT
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+def log_prediction(model_name, age, sex, job, housing, saving_accounts, checking_accounts,
+                    credit_amount, duration, prediction, prob_good, credit_score, decision):
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO predictions (
+            timestamp, model_used, age, sex, job, housing, saving_accounts,
+            checking_accounts, credit_amount, duration, prediction,
+            probability_good, credit_score, decision
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    """, (
+        datetime.now().isoformat(), model_name, age, sex, job, housing,
+        saving_accounts, checking_accounts, credit_amount, duration,
+        prediction, float(prob_good), credit_score, decision
+    ))
+    conn.commit()
+    conn.close()
+
+init_db()
+
 def generate_pdf_report(input_df, pred, prob_good, credit_score, importance_df, fig, applicant_inputs):
     buffer = BytesIO()
     doc = SimpleDocTemplate(buffer, pagesize=letter, topMargin=0.5*inch, bottomMargin=0.5*inch)
@@ -84,19 +134,45 @@ def generate_pdf_report(input_df, pred, prob_good, credit_score, importance_df, 
     buffer.seek(0)
     return buffer
 
-model = joblib.load('../models/xgboost_balanced_credit_model.pkl')
+AVAILABLE_MODELS = {
+    "XGBoost (Recommended)": "../models/xgboost_balanced_credit_model.pkl",
+    "Random Forest": "../models/random_forest_balanced.pkl",
+    "Extra Trees": "../models/extra_trees_balanced.pkl",
+    "Logistic Regression": "../models/logistic_regression_balanced.pkl",
+    "SVM": "../models/svm_balanced.pkl",
+}
+
+@st.cache_resource
+def load_model(model_path):
+    return joblib.load(model_path)
 
 # tabs layout at the top of the app
-tab1, tab2, tab3 = st.tabs(["🔮 Credit Risk Predictor", "📊 Historical Data Insights", "📁 Batch Prediction"])
-
+tab1, tab2, tab3, tab4 = st.tabs(["🔮 Credit Risk Predictor", "📊 Historical Data Insights", "📁 Batch Prediction", "🗂️ Prediction Log"])
 
 encoders = {col: joblib.load(f"../models/{col}_encoder.pkl") for col in ('Sex', 'Housing', 'Saving accounts', 'Checking account')}
 background_data = joblib.load('../models/shap_background.pkl')
-explainer = shap.TreeExplainer(model, model_output="probability", data=background_data)
 
 with tab1:
     st.title("Credit Risk Scoring App")
     st.write("Enter application information to predict if the credit risk is good or bad")
+    
+    st.markdown("### ⚙️ Model Selection")
+    selected_model_name = st.selectbox(
+        "Choose which trained model to use for prediction:",
+        options=list(AVAILABLE_MODELS.keys()),
+        index=0,
+        help="XGBoost is recommended based on evaluation results (best F1-macro and recall on high-risk applicants)."
+    )
+    model = load_model(AVAILABLE_MODELS[selected_model_name])
+
+    if selected_model_name in ["XGBoost (Recommended)", "Random Forest", "Extra Trees"]:
+        explainer = shap.TreeExplainer(model, model_output="probability", data=background_data)
+        shap_available = True
+    else:
+        shap_available = False
+
+    st.caption(f"Currently using: **{selected_model_name}**")
+    st.markdown("---")
 
     age = st.number_input("Age", min_value=18, max_value=80, value=30)
     sex = st.selectbox("Sex", ["male", "female"])
@@ -130,6 +206,15 @@ with tab1:
         # Map probability to a standard credit score scale (300 to 850)
         credit_score = int(300 + (prob_good * 550))
 
+        decision_str = "Approved" if credit_score >= 700 else ("Conditional" if credit_score >= 550 else "Denied")
+        result_str = "Good" if pred == 1 else "Bad"
+
+        log_prediction(
+            selected_model_name, age, sex, job, housing, saving_accounts,
+            checking_accounts, credit_amount, duration, result_str,
+            prob_good, credit_score, decision_str
+        )
+
         # 3. Display the original simple result text
         if pred == 1:
             st.success("The predicted credit risk is: **Good**")
@@ -149,82 +234,115 @@ with tab1:
         st.write(f"Probability of being a reliable borrower: {prob_good * 100:.1f}%")
 
         # -------------------------------------------------------------
-        # FEATURE IMPORTANCE SECTION (CS Project Requirement)
+        # CONFIDENCE / UNCERTAINTY DISPLAY
         # -------------------------------------------------------------
         st.markdown("---")
-        st.subheader("🤖 Model Decision Factors (Global Importance)")
-        st.write("This chart shows which factors your trained model relies on most to determine credit risk:")
+        st.subheader("📏 Prediction Confidence")
 
-        importance_df = pd.DataFrame({
-            'Feature': input_df.columns,
-            'Importance': model.feature_importances_
-        }).sort_values(by='Importance', ascending=False)
+        # Distance from the 50/50 decision boundary — the further from 0.5, the more confident
+        confidence_pct = float(abs(prob_good - 0.5) * 2 * 100)
 
-        # Render the chart using Streamlit's built-in native bar chart
-        st.bar_chart(data=importance_df, x='Feature', y='Importance', color="#2E86C1")
+        if confidence_pct >= 70:
+            confidence_label = "High Confidence"
+            confidence_color = "🟢"
+        elif confidence_pct >= 35:
+            confidence_label = "Moderate Confidence"
+            confidence_color = "🟡"
+        else:
+            confidence_label = "Low Confidence (borderline case)"
+            confidence_color = "🔴"
+
+        st.write(f"{confidence_color} **{confidence_label}** — {confidence_pct:.1f}%")
+        st.progress(float(confidence_pct / 100))
+
+        if confidence_pct < 35:
+            st.warning("⚠️ This prediction is close to the decision boundary. The model is not strongly confident in either direction — consider requesting additional applicant information or manual review.")
+
+
+        # -------------------------------------------------------------
+        # FEATURE IMPORTANCE SECTION (CS Project Requirement)
+        # -------------------------------------------------------------
+        if shap_available:
+            st.markdown("---")
+            st.subheader("🤖 Model Decision Factors (Global Importance)")
+            st.write("This chart shows which factors your trained model relies on most to determine credit risk:")
+
+            importance_df = pd.DataFrame({
+                'Feature': input_df.columns,
+                'Importance': model.feature_importances_
+            }).sort_values(by='Importance', ascending=False)
+
+            # Render the chart using Streamlit's built-in native bar chart
+            st.bar_chart(data=importance_df, x='Feature', y='Importance', color="#2E86C1")
+
+
 
         # ------------------------------------------------------------------
         # SHAP LOCAL EXPLAINABILITY VISUALIZATION (Waterfall Chart)
         # ------------------------------------------------------------------
-        st.markdown("---")
-        st.subheader("🔍 Local Explainability: Why this decision was made")
+        if shap_available:
+            st.markdown("---")
+            st.subheader("🔍 Local Explainability: Why this decision was made")
 
-        # 1. Compute local SHAP values for the specific applicant row
-        shap_values = explainer(input_df)
+            # 1. Compute local SHAP values for the specific applicant row
+            shap_values = explainer(input_df)
 
-        # 2. Create a Matplotlib figure environment (Slightly narrower for side-by-side view)
-        fig, ax = plt.subplots(figsize=(8, 5))
+            # 2. Create a Matplotlib figure environment (Slightly narrower for side-by-side view)
+            fig, ax = plt.subplots(figsize=(8, 5))
 
-        if len(shap_values.shape) == 3:  # If multi-class outputs exist
-            shap.plots.waterfall(shap_values[0, :, 1], show=False)
-        else:
-            shap.plots.waterfall(shap_values[0], show=False)
+            if len(shap_values.shape) == 3:  # If multi-class outputs exist
+                shap.plots.waterfall(shap_values[0, :, 1], show=False)
+            else:
+                shap.plots.waterfall(shap_values[0], show=False)
 
-        plt.tight_layout()
+            plt.tight_layout()
 
-        # 3. Create two side-by-side layout columns (1 part text, 1.5 parts chart)
-        col_text, col_chart = st.columns([1, 1.5])
+            # 3. Create two side-by-side layout columns (1 part text, 1.5 parts chart)
+            col_text, col_chart = st.columns([1, 1.5])
 
-        # Left Column: The Technical Explanation
-        with col_text:
-            st.markdown("### 📊 How to read this chart:")
-            st.markdown(
-                """
-                * **Baseline ($E[f(X)]$)**: The starting point ($0.5$). This is the average probability of being a 'Good' risk across all historical applicants.
-                * **Final Score ($f(x)$)**: The final calculated probability score for *this specific applicant*.
-                * **🔴 Pink/Red Bars (+)**: Factors that **increased** the score, pushing the applicant closer to being approved (lower risk).
-                * **🔵 Blue Bars (-)**: Factors that **dragged** the score down, pushing the applicant closer to being denied (higher risk).
+            # Left Column: The Technical Explanation
+            with col_text:
+                st.markdown("### 📊 How to read this chart:")
+                st.markdown(
+                    """
+                    * **Baseline ($E[f(X)]$)**: The starting point ($0.5$). This is the average probability of being a 'Good' risk across all historical applicants.
+                    * **Final Score ($f(x)$)**: The final calculated probability score for *this specific applicant*.
+                    * **🔴 Pink/Red Bars (+)**: Factors that **increased** the score, pushing the applicant closer to being approved (lower risk).
+                    * **🔵 Blue Bars (-)**: Factors that **dragged** the score down, pushing the applicant closer to being denied (higher risk).
 
-                *The vertical list on the left shows the applicant's input parameters (e.g., Duration, Age) ordered by how heavily they impacted this specific model decision.*
-                """
-            )
+                    *The vertical list on the left shows the applicant's input parameters (e.g., Duration, Age) ordered by how heavily they impacted this specific model decision.*
+                    """
+                )
 
-        # Right Column: The Visual Chart
-        with col_chart:
-            st.pyplot(fig)
+            # Right Column: The Visual Chart
+            with col_chart:
+                st.pyplot(fig)
 
             # ------------------------------------------------------------------
-        # PDF REPORT EXPORT
-        # ------------------------------------------------------------------
-        st.markdown("---")
-        st.subheader("📄 Download Report")
+            # PDF REPORT EXPORT
+            # ------------------------------------------------------------------
+            st.markdown("---")
+            st.subheader("📄 Download Report")
 
-        applicant_inputs = {
-            "Age": age, "Sex": sex, "Job": job, "Housing": housing,
-            "Saving Accounts": saving_accounts, "Checking Account": checking_accounts,
-            "Credit Amount": credit_amount, "Duration (months)": duration
-        }
+            applicant_inputs = {
+                "Age": age, "Sex": sex, "Job": job, "Housing": housing,
+                "Saving Accounts": saving_accounts, "Checking Account": checking_accounts,
+                "Credit Amount": credit_amount, "Duration (months)": duration
+            }
 
-        pdf_buffer = generate_pdf_report(
-            input_df, pred, prob_good, credit_score, importance_df, fig, applicant_inputs
-        )
+            pdf_buffer = generate_pdf_report(
+                input_df, pred, prob_good, credit_score, importance_df, fig, applicant_inputs
+            )
 
-        st.download_button(
-            label="⬇️ Download PDF Report",
-            data=pdf_buffer,
-            file_name=f"credit_risk_report_{age}yo_{sex}.pdf",
-            mime="application/pdf"
-        )
+            st.download_button(
+                label="⬇️ Download PDF Report",
+                data=pdf_buffer,
+                file_name=f"credit_risk_report_{age}yo_{sex}.pdf",
+                mime="application/pdf"
+            )
+        else:
+            st.info(f"ℹ️ SHAP local explainability and PDF export are currently only available for tree-based models (XGBoost, Random Forest, Extra Trees). {selected_model_name} doesn't support the same explainer type.")
+
 
 with tab2:
     st.title("📊 Historical Data Explorer")
@@ -380,3 +498,33 @@ with tab3:
 
         except Exception as e:
             st.error(f"⚠️ Error processing file: {e}")
+
+with tab4:
+    st.title("🗂️ Prediction History")
+    st.write("A log of every prediction made through this application.")
+
+    conn = sqlite3.connect(DB_PATH)
+    log_df = pd.read_sql_query("SELECT * FROM predictions ORDER BY timestamp DESC", conn)
+    conn.close()
+
+    if len(log_df) == 0:
+        st.info("No predictions logged yet. Make a prediction in the 'Credit Risk Predictor' tab to see it appear here.")
+    else:
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Total Predictions Logged", len(log_df))
+        with col2:
+            st.metric("Approved", (log_df['decision'] == 'Approved').sum())
+        with col3:
+            st.metric("Denied", (log_df['decision'] == 'Denied').sum())
+
+        st.markdown("---")
+        st.dataframe(log_df, use_container_width=True)
+
+        csv_output = log_df.to_csv(index=False)
+        st.download_button(
+            label="⬇️ Download Full Log as CSV",
+            data=csv_output,
+            file_name="prediction_log.csv",
+            mime="text/csv"
+        )
