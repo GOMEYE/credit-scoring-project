@@ -14,6 +14,119 @@ from io import BytesIO
 import sqlite3
 from datetime import datetime
 
+
+st.set_page_config(
+    page_title="Credit Risk Scoring System",
+    page_icon="🏦",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
+
+def apply_custom_styling():
+    st.markdown("""
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Source+Serif+4:wght@600;700&family=Inter:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500;600&display=swap');
+
+    html, body, [class*="css"] {
+        font-family: 'Inter', sans-serif;
+    }
+
+    .stApp {
+        background-color: #0E1826;
+    }
+
+    h1, h2, h3 {
+        font-family: 'Source Serif 4', serif !important;
+        color: #E7ECF3 !important;
+        letter-spacing: -0.01em;
+    }
+
+    /* Eyebrow label style, used via markdown */
+    .eyebrow {
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 0.75rem;
+        letter-spacing: 0.15em;
+        text-transform: uppercase;
+        color: #C9A227;
+        margin-bottom: 0.25rem;
+    }
+
+    /* Hairline divider */
+    hr {
+        border-color: #2C3E5C !important;
+    }
+
+    /* Buttons */
+    .stButton > button {
+        background-color: #C9A227;
+        color: #0E1826;
+        border: none;
+        border-radius: 4px;
+        font-family: 'Inter', sans-serif;
+        font-weight: 600;
+        letter-spacing: 0.02em;
+        padding: 0.5rem 1.5rem;
+        transition: background-color 0.15s ease;
+    }
+    .stButton > button:hover {
+        background-color: #E0B838;
+        color: #0E1826;
+    }
+
+    /* Tabs */
+    .stTabs [data-baseweb="tab-list"] {
+        gap: 4px;
+        border-bottom: 1px solid #2C3E5C;
+    }
+    .stTabs [data-baseweb="tab"] {
+        font-family: 'IBM Plex Mono', monospace;
+        font-size: 0.85rem;
+        letter-spacing: 0.05em;
+        color: #93A2BC;
+        text-transform: uppercase;
+    }
+    .stTabs [aria-selected="true"] {
+        color: #C9A227 !important;
+        border-bottom: 2px solid #C9A227 !important;
+    }
+
+    /* Metrics */
+    [data-testid="stMetricValue"] {
+        font-family: 'IBM Plex Mono', monospace !important;
+        color: #E7ECF3 !important;
+    }
+    [data-testid="stMetricLabel"] {
+        font-family: 'Inter', sans-serif !important;
+        color: #93A2BC !important;
+        text-transform: uppercase;
+        font-size: 0.75rem !important;
+        letter-spacing: 0.05em;
+    }
+
+    /* Progress bar (confidence) */
+    .stProgress > div > div > div {
+        background-color: #C9A227 !important;
+    }
+
+    /* Dataframes */
+    [data-testid="stDataFrame"] {
+        font-family: 'IBM Plex Mono', monospace;
+        border: 1px solid #2C3E5C;
+        border-radius: 4px;
+    }
+
+    /* Input widgets */
+    .stSelectbox > div > div, .stNumberInput > div > div {
+        background-color: #16233A;
+        border: 1px solid #2C3E5C;
+        border-radius: 4px;
+        color: #E7ECF3;
+    }
+    </style>
+    """, unsafe_allow_html=True)
+
+apply_custom_styling()
+
 DB_PATH = "../data/predictions_log.db"
 
 def init_db():
@@ -178,10 +291,10 @@ with tab1:
     sex = st.selectbox("Sex", ["male", "female"])
     job = st.number_input("Job (0-3)", min_value=0, max_value=3, value=1)
     housing = st.selectbox("Housing", ['own', 'rent', 'free'])
-    saving_accounts = st.selectbox("Saving Accounts", ['little', 'moderate', 'rich', 'quite rich'])
-    checking_accounts = st.selectbox("Checking Accounts", ['little', 'moderate', 'rich', 'quite rich'])
-    credit_amount = st.number_input("Credit Amount", min_value=0, value=1000)
-    duration = st.number_input("Duration (months)", min_value=1, value=12)
+    saving_accounts = st.selectbox("Saving Accounts", ['little', 'moderate', 'rich', 'quite rich'], index=1)
+    checking_accounts = st.selectbox("Checking Accounts", ['little', 'moderate', 'rich', 'quite rich'], index=1)
+    credit_amount = st.number_input("Credit Amount", min_value=0, value=2500)
+    duration = st.number_input("Duration (months)", min_value=1, value=18)
 
     input_df = pd.DataFrame({
         "Age": [age],
@@ -263,17 +376,25 @@ with tab1:
         # FEATURE IMPORTANCE SECTION (CS Project Requirement)
         # -------------------------------------------------------------
         if shap_available:
-            st.markdown("---")
-            st.subheader("🤖 Model Decision Factors (Global Importance)")
-            st.write("This chart shows which factors your trained model relies on most to determine credit risk:")
+         st.markdown("---")
+        st.markdown(
+            """
+            <div class="eyebrow">Model Decision Factors</div>
+            <p style="color:#93A2BC; font-size:0.9rem; margin-top:0.25rem;">
+                Which factors this model relies on most, across all applicants — not just this one.
+            </p>
+            """,
+            unsafe_allow_html=True
+        )
 
-            importance_df = pd.DataFrame({
-                'Feature': input_df.columns,
-                'Importance': model.feature_importances_
-            }).sort_values(by='Importance', ascending=False)
+        importance_df = pd.DataFrame({
+            'Feature': input_df.columns,
+            'Importance': model.feature_importances_
+        }).sort_values(by='Importance', ascending=False)
 
-            # Render the chart using Streamlit's built-in native bar chart
-            st.bar_chart(data=importance_df, x='Feature', y='Importance', color="#2E86C1")
+        st.markdown('<div style="background-color:#16233A; border:1px solid #2C3E5C; border-radius:6px; padding:1rem;">', unsafe_allow_html=True)
+        st.bar_chart(data=importance_df, x='Feature', y='Importance', color="#C9A227", height=800)
+        st.markdown('</div>', unsafe_allow_html=True)
 
 
 
@@ -302,17 +423,30 @@ with tab1:
 
             # Left Column: The Technical Explanation
             with col_text:
-                st.markdown("### 📊 How to read this chart:")
-                st.markdown(
-                    """
-                    * **Baseline ($E[f(X)]$)**: The starting point ($0.5$). This is the average probability of being a 'Good' risk across all historical applicants.
-                    * **Final Score ($f(x)$)**: The final calculated probability score for *this specific applicant*.
-                    * **🔴 Pink/Red Bars (+)**: Factors that **increased** the score, pushing the applicant closer to being approved (lower risk).
-                    * **🔵 Blue Bars (-)**: Factors that **dragged** the score down, pushing the applicant closer to being denied (higher risk).
-
-                    *The vertical list on the left shows the applicant's input parameters (e.g., Duration, Age) ordered by how heavily they impacted this specific model decision.*
-                    """
-                )
+                    st.markdown(
+                        """
+                        <div style="background-color: #16233A; border: 1px solid #2C3E5C; border-radius: 6px; padding: 1.25rem 1.5rem;">
+                            <div class="eyebrow">How to read this</div>
+                            <p style="color: #E7ECF3; font-size: 0.95rem; line-height: 1.5; margin-top: 0.5rem;">
+                                Every applicant starts at the average approval chance across all past applicants — about
+                                <strong>50%</strong>. From there, each factor listed on the left either pushes the applicant's
+                                score <strong>up</strong> (more likely approved) or <strong>down</strong> (more likely denied),
+                                based on this specific application.
+                            </p>
+                            <p style="color: #E7ECF3; font-size: 0.95rem; line-height: 1.5;">
+                                <span style="color:#C1523D; font-weight:600;">🔴 Red bars</span> pushed the score <strong>up</strong>
+                                (toward approval).<br>
+                                <span style="color:#3FA796; font-weight:600;">🔵 Blue bars</span> pushed the score <strong>down</strong>
+                                (toward denial).
+                            </p>
+                            <p style="color: #93A2BC; font-size: 0.85rem; font-style: italic; margin-bottom: 0;">
+                                The factors are ordered by how much impact they had on this specific applicant — not
+                                how important they are in general.
+                            </p>
+                        </div>
+                        """,
+                        unsafe_allow_html=True
+                    )
 
             # Right Column: The Visual Chart
             with col_chart:
