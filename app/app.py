@@ -122,6 +122,18 @@ def apply_custom_styling():
         border-radius: 4px;
         color: #E7ECF3;
     }
+                
+        div[data-testid="stVerticalBlockBorderWrapper"] {
+        border-color: #2C3E5C !important;
+        background-color: #16233A !important;
+        border-radius: 6px !important;
+    }
+                
+    /* Multiselect tags */
+    span[data-baseweb="tag"] {
+        background-color: #C9A227 !important;
+        color: #0E1826 !important;
+    }
     </style>
     """, unsafe_allow_html=True)
 
@@ -266,16 +278,28 @@ encoders = {col: joblib.load(f"../models/{col}_encoder.pkl") for col in ('Sex', 
 background_data = joblib.load('../models/shap_background.pkl')
 
 with tab1:
-    st.title("Credit Risk Scoring App")
-    st.write("Enter application information to predict if the credit risk is good or bad")
-    
-    st.markdown("### ⚙️ Model Selection")
-    selected_model_name = st.selectbox(
-        "Choose which trained model to use for prediction:",
-        options=list(AVAILABLE_MODELS.keys()),
-        index=0,
-        help="XGBoost is recommended based on evaluation results (best F1-macro and recall on high-risk applicants)."
+    st.markdown(
+        """
+        <div class="eyebrow">Credit Risk Scoring System</div>
+        <h1 style="margin-top:0.25rem; margin-bottom:0.25rem;">Assess an Application</h1>
+        <p style="color:#93A2BC; font-size:1rem; margin-bottom:1.5rem;">
+            Enter an applicant's details to generate a risk assessment, credit score, and explanation.
+        </p>
+        """,
+        unsafe_allow_html=True
     )
+
+    with st.container(border=True):
+        st.markdown('<div class="eyebrow">Model</div>', unsafe_allow_html=True)
+        selected_model_name = st.selectbox(
+            "Choose which trained model to use for prediction:",
+            options=list(AVAILABLE_MODELS.keys()),
+            index=0,
+            label_visibility="collapsed",
+            help="XGBoost is recommended based on evaluation results (best F1-macro and recall on high-risk applicants)."
+        )
+        st.caption(f"Currently using **{selected_model_name}**")
+
     model = load_model(AVAILABLE_MODELS[selected_model_name])
 
     if selected_model_name in ["XGBoost (Recommended)", "Random Forest", "Extra Trees"]:
@@ -284,7 +308,6 @@ with tab1:
     else:
         shap_available = False
 
-    st.caption(f"Currently using: **{selected_model_name}**")
     st.markdown("---")
 
     age = st.number_input("Age", min_value=18, max_value=80, value=30)
@@ -321,55 +344,84 @@ with tab1:
 
         decision_str = "Approved" if credit_score >= 700 else ("Conditional" if credit_score >= 550 else "Denied")
         result_str = "Good" if pred == 1 else "Bad"
+        status_colors = {"Approved": "#3FA796", "Conditional": "#D9A441", "Denied": "#C1523D"}
+        status_color = status_colors[decision_str]
+        score_label = {"Approved": "Excellent", "Conditional": "Fair", "Denied": "Poor Risk"}[decision_str]
 
-        log_prediction(
-            selected_model_name, age, sex, job, housing, saving_accounts,
-            checking_accounts, credit_amount, duration, result_str,
-            prob_good, credit_score, decision_str
+        st.markdown(
+            f"""
+            <div style="background-color:#16233A; border:1px solid {status_color}; border-radius:8px;
+                        padding:1.5rem 2rem; margin-top:1rem; display:flex; align-items:center;
+                        justify-content:space-between; flex-wrap:wrap; gap:1.5rem;">
+                <div>
+                    <div class="eyebrow" style="color:{status_color};">Risk Assessment</div>
+                    <div style="font-family:'Source Serif 4', serif; font-size:1.8rem; color:#E7ECF3; margin-top:0.25rem;">
+                        {result_str} Credit Risk
+                    </div>
+                    <div style="font-family:'IBM Plex Mono', monospace; color:#93A2BC; font-size:0.9rem; margin-top:0.5rem;">
+                        Probability of reliable repayment: <span style="color:#E7ECF3;">{prob_good*100:.1f}%</span>
+                    </div>
+                </div>
+                <div style="text-align:center;">
+                    <div style="font-family:'IBM Plex Mono', monospace; font-size:2.75rem; font-weight:600; color:{status_color}; line-height:1;">
+                        {credit_score}
+                    </div>
+                    <div class="eyebrow" style="margin-top:0.25rem;">Credit Score · {score_label}</div>
+                </div>
+                <div style="border:2px solid {status_color}; color:{status_color}; padding:0.6rem 1.2rem;
+                            border-radius:4px; font-family:'IBM Plex Mono', monospace; font-weight:600;
+                            letter-spacing:0.1em; text-transform:uppercase; transform:rotate(-3deg);">
+                    {decision_str}
+                </div>
+            </div>
+            """,
+            unsafe_allow_html=True
         )
-
-        # 3. Display the original simple result text
-        if pred == 1:
-            st.success("The predicted credit risk is: **Good**")
-        else:
-            st.error("The predicted credit risk is: **Bad**")
-
-        # 4. Display the advanced Credit Score metric underneath
-        st.subheader("Analysis Results")
-
-        if credit_score >= 700:
-            st.success(f"🎉 **APPROVED** | Credit Score: {credit_score} (Excellent)")
-        elif credit_score >= 550:
-            st.warning(f"⚠️ **CONDITIONAL APPROVAL** | Credit Score: {credit_score} (Fair)")
-        else:
-            st.error(f"❌ **DENIED** | Credit Score: {credit_score} (Poor Risk)")
-
-        st.write(f"Probability of being a reliable borrower: {prob_good * 100:.1f}%")
 
         # -------------------------------------------------------------
         # CONFIDENCE / UNCERTAINTY DISPLAY
         # -------------------------------------------------------------
         st.markdown("---")
-        st.subheader("📏 Prediction Confidence")
 
-        # Distance from the 50/50 decision boundary — the further from 0.5, the more confident
         confidence_pct = float(abs(prob_good - 0.5) * 2 * 100)
 
         if confidence_pct >= 70:
             confidence_label = "High Confidence"
-            confidence_color = "🟢"
+            tier_color = "#3FA796"
         elif confidence_pct >= 35:
             confidence_label = "Moderate Confidence"
-            confidence_color = "🟡"
+            tier_color = "#D9A441"
         else:
-            confidence_label = "Low Confidence (borderline case)"
-            confidence_color = "🔴"
+            confidence_label = "Low Confidence — borderline case"
+            tier_color = "#C1523D"
 
-        st.write(f"{confidence_color} **{confidence_label}** — {confidence_pct:.1f}%")
-        st.progress(float(confidence_pct / 100))
+        st.markdown(
+            f"""
+            <div class="eyebrow">Prediction Confidence</div>
+            <p style="color:{tier_color}; font-family:'IBM Plex Mono', monospace; font-size:0.95rem;
+                       font-weight:600; margin-top:0.25rem; margin-bottom:0.5rem;">
+                {confidence_label} — {confidence_pct:.1f}%
+            </p>
+            <div style="background-color:#16233A; border:1px solid #2C3E5C; border-radius:4px;
+                        height:10px; width:100%; overflow:hidden;">
+                <div style="background-color:{tier_color}; height:100%; width:{confidence_pct}%;
+                            border-radius:4px;"></div>
+            </div>
+            """,
+            unsafe_allow_html=True
+        )
 
         if confidence_pct < 35:
-            st.warning("⚠️ This prediction is close to the decision boundary. The model is not strongly confident in either direction — consider requesting additional applicant information or manual review.")
+            st.markdown(
+                f"""
+                <div style="background-color:#16233A; border-left:3px solid {tier_color}; border-radius:4px;
+                            padding:0.75rem 1rem; margin-top:1rem; color:#E7ECF3; font-size:0.9rem;">
+                    ⚠️ This prediction is close to the decision boundary. The model is not strongly confident
+                    in either direction — consider requesting additional applicant information or manual review.
+                </div>
+                """,
+                unsafe_allow_html=True
+            )
 
 
         # -------------------------------------------------------------
@@ -479,8 +531,16 @@ with tab1:
 
 
 with tab2:
-    st.title("📊 Historical Data Explorer")
-    st.write("Examine trends and distributions from the historical training dataset.")
+    st.markdown(
+        """
+        <div class="eyebrow">Credit Risk Scoring System</div>
+        <h1 style="margin-top:0.25rem; margin-bottom:0.25rem;">Historical Data</h1>
+        <p style="color:#93A2BC; font-size:1rem; margin-bottom:1.5rem;">
+            Explore trends and distributions from the training dataset.
+        </p>
+        """,
+        unsafe_allow_html=True
+    )
 
     # 1. Load the raw dataset for exploration
     @st.cache_data
@@ -494,33 +554,38 @@ with tab2:
         df_eda = load_eda_data()
 
         # 2. Key Performance Metrics Row
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Total Historical Records", f"{len(df_eda)}")
-        with col2:
-            st.metric("Average Loan Duration", f"{df_eda['Duration'].mean():.1f} Months")
-        with col3:
-            st.metric("Average Credit Amount", f"${df_eda['Credit amount'].mean():.2f}")
+        with st.container(border=True):
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Historical Records", f"{len(df_eda)}")
+            with col2:
+                st.metric("Average Loan Duration", f"{df_eda['Duration'].mean():.1f} Months")
+            with col3:
+                st.metric("Average Credit Amount", f"${df_eda['Credit amount'].mean():.2f}")
 
         st.markdown("---")
 
         # 3. Interactive Filtering Sidebar/Controls
-        st.subheader("🎛️ Interactive Dataset Filtering")
+        st.markdown('<div class="eyebrow">Interactive Dataset Filtering</div>', unsafe_allow_html=True)
 
         # Create filtering inputs side-by-side
         filter_col1, filter_col2 = st.columns(2)
         with filter_col1:
+            st.markdown('<div class="eyebrow">Filter by Housing Type</div>', unsafe_allow_html=True)
             selected_housing = st.multiselect(
                 "Filter by Housing Type:",
                 options=df_eda['Housing'].dropna().unique(),
-                default=df_eda['Housing'].dropna().unique()
+                default=df_eda['Housing'].dropna().unique(),
+                label_visibility="collapsed"
             )
         with filter_col2:
+            st.markdown('<div class="eyebrow">Filter by Age Range</div>', unsafe_allow_html=True)
             age_range = st.slider(
                 "Filter by Age Range:",
                 int(df_eda['Age'].min()),
                 int(df_eda['Age'].max()),
-                (int(df_eda['Age'].min()), int(df_eda['Age'].max()))
+                (int(df_eda['Age'].min()), int(df_eda['Age'].max())),
+                label_visibility="collapsed"
             )
 
         # Apply the filters to the dataframe
@@ -531,17 +596,17 @@ with tab2:
         ]
 
         # 4. Interactive Visualizations
-        st.subheader("📈 Filtered Distribution Insights")
+        st.markdown('<div class="eyebrow" style="margin-top:1.5rem;">Filtered Distribution Insights</div>', unsafe_allow_html=True)
 
         chart_col1, chart_col2 = st.columns(2)
         with chart_col1:
-            st.write("📊 **Credit Amount Distribution (Filtered)**")
-            st.bar_chart(filtered_df['Credit amount'].value_counts().sort_index())
+            st.markdown('<div class="eyebrow">Credit Amount Distribution</div>', unsafe_allow_html=True)
+            st.bar_chart(filtered_df['Credit amount'].value_counts().sort_index(), color="#C9A227")
 
         with chart_col2:
-            st.write("🎯 **Purpose of Loans Breakdown**")
+            st.markdown('<div class="eyebrow">Purpose of Loans</div>', unsafe_allow_html=True)
             purpose_counts = filtered_df['Purpose'].value_counts()
-            st.bar_chart(purpose_counts)
+            st.bar_chart(purpose_counts, color="#3FA796")
 
         # 5. Raw Data Preview
         with st.expander("📋 View Filtered Raw Data Sub-table"):
@@ -551,8 +616,16 @@ with tab2:
         st.error("⚠️ 'german_credit_data.csv' not found. Please ensure the dataset file is in your project folder to display dashboard insights.")
 
 with tab3:
-    st.title("📁 Batch Credit Risk Prediction")
-    st.write("Upload a CSV file containing multiple applicants to get predictions for all of them at once.")
+    st.markdown(
+        """
+        <div class="eyebrow">Credit Risk Scoring System</div>
+        <h1 style="margin-top:0.25rem; margin-bottom:0.25rem;">Batch Prediction</h1>
+        <p style="color:#93A2BC; font-size:1rem; margin-bottom:1.5rem;">
+            Upload a CSV of multiple applicants to score them all at once.
+        </p>
+        """,
+        unsafe_allow_html=True
+    )
 
     st.markdown("""
     **Required columns:** `Age`, `Sex`, `Job`, `Housing`, `Saving accounts`, `Checking account`, `Credit amount`, `Duration`
@@ -607,15 +680,16 @@ with tab3:
                     st.markdown("---")
                     st.subheader("📊 Batch Results Summary")
 
-                    col1, col2, col3, col4 = st.columns(4)
-                    with col1:
-                        st.metric("Total Applicants", len(results_df))
-                    with col2:
-                        st.metric("Approved", (results_df['Decision'] == 'Approved').sum())
-                    with col3:
-                        st.metric("Conditional", (results_df['Decision'] == 'Conditional').sum())
-                    with col4:
-                        st.metric("Denied", (results_df['Decision'] == 'Denied').sum())
+                    with st.container(border=True):
+                        col1, col2, col3, col4 = st.columns(4)
+                        with col1:
+                            st.metric("Total Applicants", len(results_df))
+                        with col2:
+                            st.metric("Approved", (results_df['Decision'] == 'Approved').sum())
+                        with col3:
+                            st.metric("Conditional", (results_df['Decision'] == 'Conditional').sum())
+                        with col4:
+                            st.metric("Denied", (results_df['Decision'] == 'Denied').sum())
 
                     st.markdown("---")
                     st.subheader("📋 Full Results")
@@ -634,8 +708,16 @@ with tab3:
             st.error(f"⚠️ Error processing file: {e}")
 
 with tab4:
-    st.title("🗂️ Prediction History")
-    st.write("A log of every prediction made through this application.")
+    st.markdown(
+        """
+        <div class="eyebrow">Credit Risk Scoring System</div>
+        <h1 style="margin-top:0.25rem; margin-bottom:0.25rem;">Prediction Log</h1>
+        <p style="color:#93A2BC; font-size:1rem; margin-bottom:1.5rem;">
+            A complete audit trail of every prediction made through this application.
+        </p>
+        """,
+        unsafe_allow_html=True
+    )
 
     conn = sqlite3.connect(DB_PATH)
     log_df = pd.read_sql_query("SELECT * FROM predictions ORDER BY timestamp DESC", conn)
@@ -644,13 +726,14 @@ with tab4:
     if len(log_df) == 0:
         st.info("No predictions logged yet. Make a prediction in the 'Credit Risk Predictor' tab to see it appear here.")
     else:
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Total Predictions Logged", len(log_df))
-        with col2:
-            st.metric("Approved", (log_df['decision'] == 'Approved').sum())
-        with col3:
-            st.metric("Denied", (log_df['decision'] == 'Denied').sum())
+        with st.container(border=True):
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                st.metric("Total Predictions Logged", len(log_df))
+            with col2:
+                st.metric("Approved", (log_df['decision'] == 'Approved').sum())
+            with col3:
+                st.metric("Denied", (log_df['decision'] == 'Denied').sum())
 
         st.markdown("---")
         st.dataframe(log_df, use_container_width=True)
